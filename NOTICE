@@ -70,6 +70,3 @@ BlockNote (@blocknote/core, @blocknote/mantine, @blocknote/react)
 Copyright (c) BlockNote contributors
 Licensed under the Mozilla Public License 2.0 (MPL-2.0).
 https://github.com/TypeCellOS/BlockNote/blob/main/LICENSE
-
-All other npm dependencies are licensed under MIT, ISC, or Apache-2.0.
-Their individual license files are included in node_modules/.
