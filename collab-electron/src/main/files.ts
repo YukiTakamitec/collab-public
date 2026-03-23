@@ -11,7 +11,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { isTreeVisibleEntry } from "../../packages/shared/src/tree-visibility";
 import { type FileFilter, isImageFile } from "./file-filter";
 
 export interface DirEntry {
@@ -31,15 +30,6 @@ export function shouldIncludeEntry(
   rootPath?: string,
 ): boolean {
   const isDirectory = entry.isDirectory();
-
-  if (
-    !isTreeVisibleEntry({
-      name: entry.name,
-      isDirectory,
-    })
-  ) {
-    return false;
-  }
 
   if (!filter || !rootPath) {
     return true;

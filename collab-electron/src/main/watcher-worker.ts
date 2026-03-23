@@ -20,8 +20,6 @@ const IGNORE = [
   "**/.next/**",
   "**/.cache/**",
   "**/__pycache__/**",
-  "**/.collaborator/**",
-  "**/.claude/**",
   "**/*.min.js",
   "**/*.min.css",
   "**/*.map",

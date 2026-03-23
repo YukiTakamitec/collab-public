@@ -93,10 +93,7 @@ export function startWorkspaceServices(
   wsConfigMap.set(path, loadWorkspaceConfig(path));
   setThumbnailCacheDir(path);
   watcher.watchWorkspace(path);
-  createFileFilter(path).then(
-    (f) => { fileFilterSetter(f); },
-    (err) => { console.error("[workspace] Failed to create file filter:", err); },
-  );
+  fileFilterSetter(createFileFilter());
   void wikilinkIndex.buildIndex(path);
   agentActivity.setWorkspacePath(path);
 }

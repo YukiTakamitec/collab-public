@@ -104,7 +104,7 @@ export async function buildWorkspaceGraph(
   filter: FileFilter | null = null,
 ): Promise<WorkspaceGraphData> {
   const activeFilter =
-    filter ?? await createFileFilter(workspacePath);
+    filter ?? createFileFilter();
   const files = await collectFiles(
     workspacePath,
     workspacePath,

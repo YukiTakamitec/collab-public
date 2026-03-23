@@ -1,6 +1,5 @@
 import ignore, { type Ignore } from "ignore";
-import { open, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { open } from "node:fs/promises";
 
 export { IMAGE_EXTENSIONS, isImageFile } from "@collab/shared/image";
 
@@ -27,8 +26,6 @@ const DEFAULT_PATTERNS: string[] = [
   "bun.lockb",
   "yarn.lock",
   "pnpm-lock.yaml",
-  ".collaborator",
-  ".claude",
   // Binary / compiled files
   "*.dylib",
   "*.so",
@@ -184,21 +181,9 @@ export function getDefaultPatterns(): string[] {
   return [...DEFAULT_PATTERNS];
 }
 
-export async function createFileFilter(
-  workspacePath: string,
-): Promise<FileFilter> {
+export function createFileFilter(): FileFilter {
   const ig = ignore().add(DEFAULT_PATTERNS);
   const binaryCache = new Map<string, Promise<boolean>>();
-
-  try {
-    const gitignore = await readFile(
-      join(workspacePath, ".gitignore"),
-      "utf-8",
-    );
-    ig.add(gitignore);
-  } catch {
-    // No .gitignore — use defaults only
-  }
 
   return {
     isIgnored: (relativePath: string) => ig.ignores(relativePath),

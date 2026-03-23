@@ -6,7 +6,6 @@ import {
 	useRef,
 } from 'react';
 import type { TreeNode } from '@collab/shared/types';
-import { isTreeVisibleEntry } from '@collab/shared/tree-visibility';
 import type { SortMode } from './types';
 
 export interface FlatItem {
@@ -179,20 +178,6 @@ export function useFileTree(
 				const entries =
 					await window.api.readDir(dirPath);
 				const children: TreeNode[] = entries
-					.filter(
-						(e: {
-							isDirectory: boolean;
-							name: string;
-						}) => {
-							return isTreeVisibleEntry(
-								{
-									name: e.name,
-									isDirectory:
-										e.isDirectory,
-								},
-							);
-						},
-					)
 					.map(
 						(e: {
 							name: string;
