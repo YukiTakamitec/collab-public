@@ -2,6 +2,7 @@ import * as pty from "node-pty";
 import * as os from "os";
 import * as fs from "node:fs";
 import * as crypto from "crypto";
+import { execFileSync } from "node:child_process";
 import { type IDisposable } from "node-pty";
 import {
   getTmuxBin,
@@ -15,6 +16,11 @@ import {
   SESSION_DIR,
   type SessionMeta,
 } from "./tmux";
+import { getTerminalMode, type TerminalMode } from "./config";
+
+function terminalMode(): TerminalMode {
+  return getTerminalMode();
+}
 
 interface PtySession {
   pty: pty.IPty;
@@ -122,6 +128,52 @@ function attachClient(
   return ptyProcess;
 }
 
+function spawnDirect(
+  sessionId: string,
+  shell: string,
+  cwd: string,
+  cols: number,
+  rows: number,
+  senderWebContentsId?: number,
+): void {
+  const env = utf8Env();
+  env.COLLAB_PTY_SESSION_ID = sessionId;
+
+  const ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd,
+    env,
+  });
+
+  const disposables: IDisposable[] = [];
+
+  disposables.push(
+    ptyProcess.onData((data: string) => {
+      sendToSender(senderWebContentsId, "pty:data", { sessionId, data });
+      scheduleForegroundCheck(sessionId);
+    }),
+  );
+
+  disposables.push(
+    ptyProcess.onExit(({ exitCode }) => {
+      deleteSessionMeta(sessionId);
+      if (!shuttingDown) {
+        sendToSender(
+          senderWebContentsId,
+          "pty:exit",
+          { sessionId, exitCode },
+        );
+        sendToMainWindow("pty:exit", { sessionId, exitCode });
+      }
+      sessions.delete(sessionId);
+    }),
+  );
+
+  sessions.set(sessionId, { pty: ptyProcess, shell, disposables });
+}
+
 export function createSession(
   cwd?: string,
   senderWebContentsId?: number,
@@ -130,35 +182,43 @@ export function createSession(
 ): { sessionId: string; shell: string } {
   const sessionId = crypto.randomBytes(8).toString("hex");
   const shell = process.env.SHELL || "/bin/zsh";
-  const name = tmuxSessionName(sessionId);
   const resolvedCwd = cwd || os.homedir();
   const c = cols || 80;
   const r = rows || 24;
 
-  tmuxExec(
-    "new-session", "-d",
-    "-s", name,
-    "-c", resolvedCwd,
-    "-x", String(c),
-    "-y", String(r),
-  );
+  const mode = terminalMode();
+  if (mode === "direct") {
+    spawnDirect(sessionId, shell, resolvedCwd, c, r, senderWebContentsId);
+  } else if (mode === "sidecar") {
+    throw new Error("sidecar mode not yet implemented");
+  } else {
+    const name = tmuxSessionName(sessionId);
 
-  tmuxExec(
-    "set-environment", "-t", name,
-    "COLLAB_PTY_SESSION_ID", sessionId,
-  );
-  tmuxExec(
-    "set-environment", "-t", name,
-    "SHELL", shell,
-  );
+    tmuxExec(
+      "new-session", "-d",
+      "-s", name,
+      "-c", resolvedCwd,
+      "-x", String(c),
+      "-y", String(r),
+    );
+
+    tmuxExec(
+      "set-environment", "-t", name,
+      "COLLAB_PTY_SESSION_ID", sessionId,
+    );
+    tmuxExec(
+      "set-environment", "-t", name,
+      "SHELL", shell,
+    );
+
+    attachClient(sessionId, c, r, senderWebContentsId);
+  }
 
   writeSessionMeta(sessionId, {
     shell,
     cwd: resolvedCwd,
     createdAt: new Date().toISOString(),
   });
-
-  attachClient(sessionId, c, r, senderWebContentsId);
 
   const session = sessions.get(sessionId)!;
   session.shell = shell;
@@ -186,6 +246,13 @@ export function reconnectSession(
   meta: SessionMeta | null;
   scrollback: string;
 } {
+  if (terminalMode() === "direct") {
+    deleteSessionMeta(sessionId);
+    throw new Error(
+      "Session reconnection is not available in direct PTY mode",
+    );
+  }
+
   const name = tmuxSessionName(sessionId);
 
   try {
@@ -238,6 +305,12 @@ export function sendRawKeys(
   sessionId: string,
   data: string,
 ): void {
+  if (terminalMode() !== "tmux") {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.pty.write(data);
+    return;
+  }
   const name = tmuxSessionName(sessionId);
   tmuxExec("send-keys", "-l", "-t", name, data);
 }
@@ -251,14 +324,16 @@ export function resizeSession(
   if (!session) return;
   session.pty.resize(cols, rows);
 
-  const name = tmuxSessionName(sessionId);
-  try {
-    tmuxExec(
-      "resize-window", "-t", name,
-      "-x", String(cols), "-y", String(rows),
-    );
-  } catch {
-    // Non-fatal
+  if (terminalMode() === "tmux") {
+    const name = tmuxSessionName(sessionId);
+    try {
+      tmuxExec(
+        "resize-window", "-t", name,
+        "-x", String(cols), "-y", String(rows),
+      );
+    } catch {
+      // Non-fatal
+    }
   }
 }
 
@@ -271,11 +346,13 @@ export function killSession(sessionId: string): void {
     sessions.delete(sessionId);
   }
 
-  const name = tmuxSessionName(sessionId);
-  try {
-    tmuxExec("kill-session", "-t", name);
-  } catch {
-    // Session may already be dead
+  if (terminalMode() === "tmux") {
+    const name = tmuxSessionName(sessionId);
+    try {
+      tmuxExec("kill-session", "-t", name);
+    } catch {
+      // Session may already be dead
+    }
   }
 
   deleteSessionMeta(sessionId);
@@ -324,10 +401,12 @@ export function killAllAndWait(): Promise<void> {
 
 export function destroyAll(): void {
   killAll();
-  try {
-    tmuxExec("kill-server");
-  } catch {
-    // Server may not be running
+  if (terminalMode() === "tmux") {
+    try {
+      tmuxExec("kill-server");
+    } catch {
+      // Server may not be running
+    }
   }
 }
 
@@ -337,6 +416,8 @@ export interface DiscoveredSession {
 }
 
 export function discoverSessions(): DiscoveredSession[] {
+  if (terminalMode() !== "tmux") return [];
+
   let tmuxNames: string[];
   try {
     const raw = tmuxExec(
@@ -390,6 +471,21 @@ export function discoverSessions(): DiscoveredSession[] {
 export function getForegroundProcess(
   sessionId: string,
 ): string | null {
+  if (terminalMode() !== "tmux") {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    try {
+      const pid = session.pty.pid;
+      const out = execFileSync(
+        "ps", ["-o", "comm=", "-p", String(pid)],
+        { encoding: "utf8", timeout: 2000 },
+      ).trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+
   const name = tmuxSessionName(sessionId);
   try {
     return tmuxExec(
@@ -469,6 +565,8 @@ function getAttachedSessionNames(): Set<string> {
 export function cleanDetachedSessions(
   activeSessionIds: string[],
 ): void {
+  if (terminalMode() !== "tmux") return;
+
   const active = new Set(activeSessionIds);
   const attached = getAttachedSessionNames();
   const discovered = discoverSessions();
@@ -481,6 +579,8 @@ export function cleanDetachedSessions(
 }
 
 export function verifyTmuxAvailable(): { ok: true } | { ok: false; message: string } {
+  if (terminalMode() !== "tmux") return { ok: true };
+
   try {
     tmuxExec("-V");
     return { ok: true };
