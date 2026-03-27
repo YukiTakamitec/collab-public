@@ -1,7 +1,7 @@
 import { app } from "electron";
 import {
-  copyFileSync,
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   writeFileSync,
@@ -9,40 +9,72 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const INSTALL_DIR = join(homedir(), ".local", "bin");
-const INSTALL_PATH = join(INSTALL_DIR, "collab");
+const isWin = process.platform === "win32";
+
 const COLLAB_DIR = join(homedir(), ".collaborator");
+const BIN_DIR = join(COLLAB_DIR, "bin");
 const HINT_MARKER = join(COLLAB_DIR, "cli-path-hinted");
 
-function getCliSource(): string {
+function getCliCjsSource(): string {
   if (app.isPackaged) {
-    return join(process.resourcesPath, "collab-cli.sh");
+    return join(process.resourcesPath, "collab-cli.cjs");
   }
-  return join(app.getAppPath(), "scripts", "collab-cli.sh");
+  return join(app.getAppPath(), "scripts", "collab-cli.cjs");
 }
 
 export function installCli(): void {
-  const source = getCliSource();
+  const source = getCliCjsSource();
   if (!existsSync(source)) {
-    console.warn(
-      "[cli-installer] CLI source not found:", source,
-    );
+    console.warn("[cli-installer] CLI source not found:", source);
     return;
   }
 
-  mkdirSync(INSTALL_DIR, { recursive: true });
-  copyFileSync(source, INSTALL_PATH);
-  chmodSync(INSTALL_PATH, 0o755);
+  mkdirSync(BIN_DIR, { recursive: true });
 
+  // Copy the Node.js CLI script
+  const cliDest = join(BIN_DIR, "collab-cli.cjs");
+  copyFileSync(source, cliDest);
+
+  if (isWin) {
+    // Windows: .cmd wrapper for CMD / PowerShell
+    writeFileSync(
+      join(BIN_DIR, "collab.cmd"),
+      `@echo off\r\nnode "%~dp0collab-cli.cjs" %*\r\n`,
+      "utf-8",
+    );
+
+    // Shell wrapper for WSL / Git Bash (same directory, no extension)
+    const shContent =
+      '#!/bin/bash\n' +
+      'exec node "$(cd "$(dirname "$0")" && pwd)/collab-cli.cjs" "$@"\n';
+    writeFileSync(join(BIN_DIR, "collab"), shContent, "utf-8");
+  } else {
+    // macOS / Linux: install to ~/.local/bin
+    const localBin = join(homedir(), ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+
+    const wrapperPath = join(localBin, "collab");
+    const shContent =
+      '#!/bin/bash\n' +
+      `exec node "${cliDest}" "$@"\n`;
+    writeFileSync(wrapperPath, shContent, "utf-8");
+    chmodSync(wrapperPath, 0o755);
+  }
+
+  // PATH hint (once)
   if (!existsSync(HINT_MARKER)) {
     const pathEnv = process.env["PATH"] ?? "";
-    if (!pathEnv.split(":").includes(INSTALL_DIR)) {
+    const sep = isWin ? ";" : ":";
+    const hintDir = isWin ? BIN_DIR : join(homedir(), ".local", "bin");
+
+    if (!pathEnv.split(sep).includes(hintDir)) {
+      const instruction = isWin
+        ? `  Windows:  set PATH=%PATH%;${BIN_DIR}\n  WSL:      export PATH="/mnt/c/Users/${require("node:os").userInfo().username}/.collaborator/bin:$PATH"`
+        : `  export PATH="${hintDir}:$PATH"`;
       console.log(
-        `[cli-installer] collab installed to ${INSTALL_PATH}. ` +
-        `Add ~/.local/bin to your PATH to use it from any terminal:\n` +
-        `  export PATH="$HOME/.local/bin:$PATH"`,
+        `[cli-installer] collab CLI installed to ${BIN_DIR}\n` +
+        `Add to PATH:\n${instruction}`,
       );
-      mkdirSync(COLLAB_DIR, { recursive: true });
       writeFileSync(HINT_MARKER, "", "utf-8");
     }
   }

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "collaborator": {
+      "command": "node",
+      "args": ["/mnt/c/Users/sra256/ProductDev/collaborator-win/collab-electron/scripts/collaborator-mcp.cjs"]
+    }
+  }
+}

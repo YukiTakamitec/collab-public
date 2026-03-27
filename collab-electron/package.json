@@ -1,6 +1,6 @@
 {
 	"name": "@collaborator/electron",
-	"version": "0.5.0",
+	"version": "0.5.0-win",
 	"private": true,
 	"license": "FSL-1.1-ALv2",
 	"type": "module",
@@ -9,26 +9,16 @@
 	],
 	"main": "out/main/index.js",
 	"scripts": {
-		"dev": "unset ELECTRON_EXEC_PATH && electron-vite dev",
+		"dev": "cross-env ELECTRON_EXEC_PATH= electron-vite dev",
 		"build": "electron-vite build",
 		"preview": "electron-vite preview",
-		"package": "./scripts/package.sh",
-		"package:unsigned": "./scripts/package.sh --no-sign",
-		"release": "bun run package && bun scripts/upload-to-github.cjs",
-		"test": "bun test",
-		"test:updater": "bun test src/main/updater/github-release-fetcher.test.ts && bun test src/main/updater/downloader.test.ts && bun test src/main/updater/update-manager.test.ts",
+		"package:win": "npm run build && electron-builder --win",
+		"test": "npx vitest run",
 		"postinstall": "electron-rebuild -f -w node-pty"
 	},
 	"build": {
 		"appId": "com.collaborator.desktop",
 		"productName": "Collaborator",
-		"publish": [
-			{
-				"provider": "github",
-				"owner": "collaborator-ai",
-				"repo": "collab-public"
-			}
-		],
 		"directories": {
 			"output": "dist"
 		},
@@ -43,30 +33,29 @@
 			"package.json",
 			"NOTICE"
 		],
-		"afterSign": "scripts/notarize.cjs",
-		"afterAllArtifactBuild": "scripts/fix-artifacts.cjs",
-		"extraResources": [
-			{
-				"from": "vendor/tmux/tmux",
-				"to": "tmux"
-			},
-			{
-				"from": "vendor/tmux/lib",
-				"to": "lib"
-			},
-			{
-				"from": "resources/tmux.conf",
-				"to": "tmux.conf"
-			},
-			{
-				"from": "resources/terminfo",
-				"to": "terminfo"
-			},
-			{
-				"from": "scripts/collab-cli.sh",
-				"to": "collab-cli.sh"
-			}
-		],
+		"win": {
+			"target": [
+				{
+					"target": "nsis",
+					"arch": ["x64"]
+				},
+				{
+					"target": "portable",
+					"arch": ["x64"]
+				}
+			],
+			"icon": "build/icon.ico",
+			"extraResources": [
+				{
+					"from": "scripts/collab-cli.cjs",
+					"to": "collab-cli.cjs"
+				}
+			]
+		},
+		"nsis": {
+			"oneClick": false,
+			"allowToChangeInstallationDirectory": true
+		},
 		"mac": {
 			"category": "public.app-category.productivity",
 			"hardenedRuntime": true,
@@ -74,6 +63,28 @@
 			"notarize": false,
 			"entitlements": "build/entitlements.mac.plist",
 			"entitlementsInherit": "build/entitlements.mac.plist",
+			"extraResources": [
+				{
+					"from": "vendor/tmux/tmux",
+					"to": "tmux"
+				},
+				{
+					"from": "vendor/tmux/lib",
+					"to": "lib"
+				},
+				{
+					"from": "resources/tmux.conf",
+					"to": "tmux.conf"
+				},
+				{
+					"from": "resources/terminfo",
+					"to": "terminfo"
+				},
+				{
+					"from": "scripts/collab-cli.cjs",
+					"to": "collab-cli.cjs"
+				}
+			],
 			"target": [
 				{
 					"target": "zip",
@@ -133,6 +144,7 @@
 		"@types/react-dom": "19.2.3",
 		"@vitejs/plugin-react": "5.1.4",
 		"app-builder-bin": "4.2.0",
+		"cross-env": "^7.0.3",
 		"electron": "40.6.0",
 		"electron-builder": "26.8.1",
 		"electron-vite": "5.0.0",

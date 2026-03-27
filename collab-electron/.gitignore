@@ -41,7 +41,11 @@ electron/out/
 .claude/
 CLAUDE.md
 build/
-scripts/
 docs/
 dev-app-update.yml
 build-debug.log
+
+# Scripts: ignore all except CLI/MCP (needed for the app)
+scripts/*
+!scripts/collab-cli.cjs
+!scripts/collaborator-mcp.cjs
