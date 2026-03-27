@@ -745,7 +745,11 @@ app.whenReady().then(async () => {
   });
 
   if (getTerminalMode() === "sidecar") {
-    await pty.ensureSidecar();
+    try {
+      await pty.ensureSidecar();
+    } catch (err) {
+      console.error("Sidecar failed to start:", err);
+    }
   }
 
   buildAppMenu();

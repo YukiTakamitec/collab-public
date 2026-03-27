@@ -43,6 +43,10 @@
 			"package.json",
 			"NOTICE"
 		],
+		"asarUnpack": [
+			"out/main/pty-sidecar.js",
+			"out/main/chunks/protocol-*.js"
+		],
 		"afterSign": "scripts/notarize.cjs",
 		"afterAllArtifactBuild": "scripts/fix-artifacts.cjs",
 		"extraResources": [

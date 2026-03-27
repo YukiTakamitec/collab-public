@@ -158,7 +158,13 @@ async function spawnSidecar(): Promise<void> {
   if (!app) throw new Error("Cannot spawn sidecar outside Electron");
 
   const sidecarPath = app.isPackaged
-    ? path.join(process.resourcesPath, "pty-sidecar.js")
+    ? path.join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "out",
+        "main",
+        "pty-sidecar.js",
+      )
     : path.join(__dirname, "pty-sidecar.js");
 
   const child = require("node:child_process").spawn(
