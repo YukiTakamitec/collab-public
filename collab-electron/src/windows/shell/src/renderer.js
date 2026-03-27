@@ -1241,7 +1241,6 @@ async function init() {
 
 	// -- Restore canvas state --
 
-	let stateLoadedSuccessfully = false;
 	const savedState = await window.shellApi.canvasLoadState();
 	if (savedState) {
 		const { centerX, centerY, zoom } = savedState.viewport;
@@ -1256,60 +1255,17 @@ async function init() {
 			: 0;
 		viewport.updateCanvas();
 		tileManager.restoreCanvasState(savedState.tiles);
-		stateLoadedSuccessfully = true;
-	} else {
-		const discovered = await window.shellApi.ptyDiscover?.() ?? [];
-		if (discovered.length > 0) {
-			console.warn(
-				`[renderer] State lost but found ${discovered.length} living tmux session(s), recovering...`,
-			);
-			const GRID_COLS = 3;
-			const SPACING_X = 420;
-			const SPACING_Y = 520;
-			for (let i = 0; i < discovered.length; i++) {
-				const col = i % GRID_COLS;
-				const row = Math.floor(i / GRID_COLS);
-				const cx = col * SPACING_X;
-				const cy = row * SPACING_Y;
-				const session = discovered[i];
-				const tile = tileManager.createCanvasTile(
-					"term", cx, cy,
-					{ ptySessionId: session.sessionId, cwd: session.meta?.cwd },
-				);
-				tileManager.spawnTerminalWebview(tile, false);
-			}
-			tileManager.saveCanvasImmediate();
-			stateLoadedSuccessfully = true;
-		}
 	}
 
-	if (stateLoadedSuccessfully) {
-		const activeSessionIds = [];
-		for (const [id] of tileManager.getTileDOMs()) {
-			const tile = getTile(id);
-			if (tile?.type === "term" && tile.ptySessionId) {
-				activeSessionIds.push(tile.ptySessionId);
-			}
+	// Kill tmux sessions that have no corresponding terminal tile
+	const activeSessionIds = [];
+	for (const [id] of tileManager.getTileDOMs()) {
+		const tile = getTile(id);
+		if (tile?.type === "term" && tile.ptySessionId) {
+			activeSessionIds.push(tile.ptySessionId);
 		}
-		window.shellApi.ptyCleanDetached?.(activeSessionIds);
-
-		// Phase 2: Kill orphaned tmux client processes (node-pty children
-		// left behind after a crash or app translocation).
-		// Delay to allow terminal tile webviews to reconnect first.
-		setTimeout(() => {
-			window.shellApi.ptyCleanupOrphanClients(activeSessionIds)
-				.then((killed) => {
-					if (killed > 0) {
-						console.log(
-							`[renderer] Cleaned up ${killed} orphaned tmux client(s)`,
-						);
-					}
-				})
-				.catch((err) => {
-					console.warn("[renderer] Orphan client cleanup failed:", err);
-				});
-		}, 5000);
 	}
+	window.shellApi.ptyCleanDetached?.(activeSessionIds);
 
 	// -- Initialize workspaces --
 

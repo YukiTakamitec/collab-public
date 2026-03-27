@@ -13,21 +13,6 @@ import "./TerminalTab.css";
 // processing many small sequential writes.
 const DATA_BUFFER_FLUSH_MS = 5;
 
-function captureCurrentViewport(term: Terminal): string {
-	const buf = term.buffer.active;
-	const lines: string[] = [];
-	for (let y = 0; y < term.rows; y++) {
-		const line = buf.getLine(y);
-		if (line) {
-			lines.push(line.translateToString(true));
-		}
-	}
-	while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') {
-		lines.pop();
-	}
-	return lines.join('\r\n');
-}
-
 interface TerminalTabProps {
 	sessionId: string;
 	visible: boolean;
@@ -58,58 +43,6 @@ function TerminalTab({ sessionId, visible, restored, scrollbackData, mode }: Ter
 		term.loadAddon(fit);
 		term.open(containerRef.current);
 		fitRef.current = fit;
-
-		let altScreenSnapshots: string[] = [];
-		let snapshotInterval: number | undefined;
-		let lastSnapshotContent = '';
-		let pendingFinalCapture: string | null = null;
-
-		const decrstDisposable = term.parser.registerCsiHandler(
-			{ prefix: '?', final: 'l' },
-			(params) => {
-				for (const p of params) {
-					const mode = Array.isArray(p) ? p[0] : p;
-					if (mode === 1049 || mode === 1047 || mode === 47) {
-						pendingFinalCapture = captureCurrentViewport(term);
-					}
-				}
-				return false;
-			}
-		);
-
-		const bufferChangeDisposable = term.buffer.onBufferChange((buf) => {
-			if (buf.type === 'alternate') {
-				altScreenSnapshots = [];
-				lastSnapshotContent = '';
-				snapshotInterval = window.setInterval(() => {
-					const current = captureCurrentViewport(term);
-					if (current !== lastSnapshotContent) {
-						altScreenSnapshots.push(current);
-						lastSnapshotContent = current;
-						if (altScreenSnapshots.length > 500) {
-							altScreenSnapshots.shift();
-						}
-					}
-				}, 3000);
-			} else if (buf.type === 'normal') {
-				if (snapshotInterval !== undefined) {
-					clearInterval(snapshotInterval);
-					snapshotInterval = undefined;
-				}
-
-				if (pendingFinalCapture && pendingFinalCapture !== lastSnapshotContent) {
-					altScreenSnapshots.push(pendingFinalCapture);
-				}
-				pendingFinalCapture = null;
-
-				if (altScreenSnapshots.length > 0) {
-					const sep = '\r\n\x1b[38;2;60;60;60m' + '\u2500'.repeat(Math.min(term.cols, 80)) + '\x1b[0m\r\n';
-					const scrollbackContent = altScreenSnapshots.join(sep);
-					term.write(sep + scrollbackContent + sep);
-					altScreenSnapshots = [];
-				}
-			}
-		});
 
 		const unicode11 = new Unicode11Addon();
 		term.loadAddon(unicode11);
@@ -262,11 +195,6 @@ function TerminalTab({ sessionId, visible, restored, scrollbackData, mode }: Ter
 			resizeObserver.disconnect();
 			window.api.offPtyData(handleData);
 			offShellBlur();
-			decrstDisposable.dispose();
-			bufferChangeDisposable.dispose();
-			if (snapshotInterval !== undefined) {
-				clearInterval(snapshotInterval);
-			}
 			term.dispose();
 			fitRef.current = null;
 		};

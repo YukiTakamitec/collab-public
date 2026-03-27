@@ -1,6 +1,7 @@
 import { execFileSync, execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { COLLAB_DIR } from "./paths";
 
 export interface SessionMeta {
@@ -147,37 +148,5 @@ export function deleteSessionMeta(sessionId: string): void {
     fs.unlinkSync(metaPath(sessionId));
   } catch {
     // no-op if file doesn't exist
-  }
-}
-
-export interface TmuxClient {
-  pid: number;
-  sessionName: string;
-}
-
-/**
- * List all attached tmux clients on the collab socket.
- * Returns an array of { pid, sessionName } for each client process.
- * This ONLY operates on the collab/collab-dev socket — user's personal
- * tmux sessions on default or other sockets are completely invisible.
- */
-export function listClients(): TmuxClient[] {
-  try {
-    const raw = tmuxExec(
-      "list-clients", "-F", "#{client_pid} #{session_name}",
-    );
-    const results: TmuxClient[] = [];
-    for (const line of raw.split("\n").filter(Boolean)) {
-      const spaceIdx = line.indexOf(" ");
-      if (spaceIdx === -1) continue;
-      const pid = parseInt(line.slice(0, spaceIdx), 10);
-      const sessionName = line.slice(spaceIdx + 1);
-      if (Number.isNaN(pid) || pid <= 0) continue;
-      results.push({ pid, sessionName });
-    }
-    return results;
-  } catch {
-    // No server running or no clients attached
-    return [];
   }
 }

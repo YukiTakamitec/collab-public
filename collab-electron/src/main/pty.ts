@@ -5,7 +5,6 @@ import * as path from "node:path";
 import * as net from "node:net";
 import * as crypto from "crypto";
 import { type IDisposable } from "node-pty";
-import { execFileSync } from "node:child_process";
 import {
   getTmuxBin,
   getTerminfoDir,
@@ -15,7 +14,6 @@ import {
   writeSessionMeta,
   readSessionMeta,
   deleteSessionMeta,
-  listClients,
   SESSION_DIR,
   type SessionMeta,
 } from "./tmux";
@@ -799,182 +797,6 @@ export async function cleanDetachedSessions(
     if (attached.has(tmuxSessionName(sessionId))) continue;
     await killSession(sessionId);
   }
-}
-
-/**
- * Check if a process with the given PID is a tmux-related process.
- * Returns true if the process name contains "tmux", false otherwise.
- * This is a safety check to avoid killing unrelated processes.
- */
-function isTmuxProcess(pid: number): boolean {
-  try {
-    const output = execFileSync(
-      "ps", ["-p", String(pid), "-o", "comm="],
-      { encoding: "utf8", timeout: 3000 },
-    ).trim();
-    return output.toLowerCase().includes("tmux");
-  } catch {
-    // Process doesn't exist or ps failed — not a valid target
-    return false;
-  }
-}
-
-/**
- * Attempt to gracefully kill a process with SIGTERM, then SIGKILL after timeout.
- */
-function killProcessGracefully(pid: number, timeoutMs = 2000): void {
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    // Process already dead
-    return;
-  }
-
-  setTimeout(() => {
-    try {
-      // Check if still alive (signal 0 = existence check)
-      process.kill(pid, 0);
-      // Still alive — force kill
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already dead — nothing to do
-    }
-  }, timeoutMs);
-}
-
-/**
- * Clean up orphaned tmux client processes on the collab socket.
- *
- * After a crash or app translocation, the in-memory `sessions` Map is empty
- * but old node-pty child processes (tmux attach clients) may still be running,
- * consuming CPU. This function:
- *
- * 1. Gets all client PIDs from `tmux list-clients` on the collab socket
- * 2. Compares with known PIDs from the in-memory sessions Map
- * 3. Also checks if the client's session is in the known session IDs list
- * 4. Verifies each orphan candidate is actually a tmux process
- * 5. Kills confirmed orphans with SIGTERM, then SIGKILL after 2s
- *
- * @param knownSessionIds - Session IDs from the successfully loaded canvas state
- * @returns Number of orphaned clients killed
- */
-export function cleanupOrphanedClients(knownSessionIds: string[]): number {
-  const clients = listClients();
-  if (clients.length === 0) return 0;
-
-  // Build set of known tmux session names from canvas state
-  const knownSessionNames = new Set(
-    knownSessionIds.map((id) => tmuxSessionName(id)),
-  );
-
-  // Build set of PIDs managed by in-memory sessions Map
-  const knownPids = new Set<number>();
-  for (const [, session] of sessions) {
-    if (session.pty.pid) {
-      knownPids.add(session.pty.pid);
-    }
-  }
-
-  // Build set of existing tmux session names (some clients might be
-  // attached to sessions that no longer exist)
-  let existingSessionNames: Set<string>;
-  try {
-    const raw = tmuxExec("list-sessions", "-F", "#{session_name}");
-    existingSessionNames = new Set(raw.split("\n").filter(Boolean));
-  } catch {
-    existingSessionNames = new Set();
-  }
-
-  let killed = 0;
-
-  for (const client of clients) {
-    // Skip clients we are currently managing
-    if (knownPids.has(client.pid)) continue;
-
-    // Client is attached to a known, legitimate session — skip it.
-    // (This could happen if reconnectSession was called and the PID
-    // is already tracked.)
-    if (knownSessionNames.has(client.sessionName)) continue;
-
-    // Client is attached to a session that no longer exists,
-    // or to a session not in our canvas state — it's an orphan candidate.
-    const sessionExists = existingSessionNames.has(client.sessionName);
-
-    // Session is alive but not tracked by canvas — don't kill it.
-    // It may belong to another workspace or have been created externally.
-    if (sessionExists) {
-      console.warn(
-        `[pty] Skipping tmux client PID ${client.pid}` +
-        ` — session "${client.sessionName}" exists but is not in canvas state`,
-      );
-      continue;
-    }
-
-    // Safety check: only kill if it's actually a tmux process
-    if (!isTmuxProcess(client.pid)) {
-      console.warn(
-        `[pty] Orphan candidate PID ${client.pid} is not a tmux process, skipping`,
-      );
-      continue;
-    }
-
-    console.log(
-      `[pty] Killing orphaned tmux client PID ${client.pid}` +
-      ` (session: ${client.sessionName}, session exists: ${sessionExists})`,
-    );
-
-    killProcessGracefully(client.pid);
-    killed++;
-  }
-
-  if (killed > 0) {
-    console.log(`[pty] Cleaned up ${killed} orphaned tmux client(s)`);
-  }
-
-  return killed;
-}
-
-/**
- * Clean stale session metadata files where the corresponding
- * tmux session no longer exists on the collab socket.
- *
- * @returns Number of stale metadata files removed
- */
-export function cleanStaleSessionMeta(): number {
-  let metaFiles: string[];
-  try {
-    metaFiles = fs
-      .readdirSync(SESSION_DIR)
-      .filter((f) => f.endsWith(".json"));
-  } catch {
-    return 0;
-  }
-
-  let existingSessionNames: Set<string>;
-  try {
-    const raw = tmuxExec("list-sessions", "-F", "#{session_name}");
-    existingSessionNames = new Set(raw.split("\n").filter(Boolean));
-  } catch {
-    // Server not running — keep all metadata
-    return 0;
-  }
-
-  let cleaned = 0;
-  for (const file of metaFiles) {
-    const sessionId = file.replace(".json", "");
-    const name = tmuxSessionName(sessionId);
-
-    if (!existingSessionNames.has(name)) {
-      deleteSessionMeta(sessionId);
-      cleaned++;
-    }
-  }
-
-  if (cleaned > 0) {
-    console.log(`[pty] Cleaned ${cleaned} stale session metadata file(s)`);
-  }
-
-  return cleaned;
 }
 
 export function verifyTmuxAvailable(): { ok: true } | { ok: false; message: string } {
