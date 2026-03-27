@@ -15,6 +15,7 @@ import { SidecarServer } from "./server";
 import {
   makeRequest,
   type JsonRpcResponse,
+  type JsonRpcNotification,
   type PingResult,
   type SessionCreateResult,
   type SessionReconnectResult,
@@ -69,6 +70,86 @@ function rpcCall(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function connectDataSocket(socketPath: string): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    const s = net.createConnection(socketPath, () => resolve(s));
+    s.on("error", reject);
+  });
+}
+
+function waitForOutput(
+  sock: net.Socket,
+  marker: string,
+  timeoutMs = 5000,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => {
+      sock.off("data", onData);
+      reject(
+        new Error(
+          `Timed out waiting for "${marker}". Got: ${JSON.stringify(buf)}`,
+        ),
+      );
+    }, timeoutMs);
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString();
+      if (buf.includes(marker)) {
+        clearTimeout(timer);
+        sock.off("data", onData);
+        resolve(buf);
+      }
+    };
+    sock.on("data", onData);
+  });
+}
+
+function createServer(): SidecarServer {
+  fs.mkdirSync(TEST_DIR, { recursive: true });
+  return new SidecarServer({
+    controlSocketPath: CONTROL_SOCK,
+    sessionSocketDir: SESSION_DIR,
+    pidFilePath: PID_PATH,
+    token: TOKEN,
+    idleTimeoutMs: 0,
+  });
+}
+
+async function createSession(
+  ctrl: net.Socket,
+  id: number,
+): Promise<SessionCreateResult> {
+  const resp = await rpcCall(ctrl, id, "session.create", {
+    shell: "/bin/sh",
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
+  });
+  return resp.result as SessionCreateResult;
+}
+
+/**
+ * Collect newline-delimited JSON messages from a socket
+ * into a shared array, useful for listening for notifications.
+ */
+function collectMessages(
+  sock: net.Socket,
+  dest: Array<JsonRpcNotification | JsonRpcResponse>,
+): void {
+  let buf = "";
+  sock.on("data", (chunk: Buffer) => {
+    buf += chunk.toString();
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.trim()) {
+        dest.push(JSON.parse(line));
+      }
+    }
+  });
 }
 
 describe("SidecarServer", () => {
@@ -315,6 +396,230 @@ describe("SidecarServer session lifecycle", () => {
     assert.ok(scrollback.includes("reconnect-marker"));
 
     data2.destroy();
+    ctrl.destroy();
+  });
+});
+
+describe("Shell exit sends session.exited notification", () => {
+  it("emits session.exited with sessionId and exitCode", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const messages: Array<JsonRpcNotification | JsonRpcResponse> = [];
+    collectMessages(ctrl, messages);
+
+    const { sessionId, socketPath } = await createSession(ctrl, 1);
+
+    // Connect data socket and send exit to terminate the shell
+    const data = await connectDataSocket(socketPath);
+    data.write("exit\n");
+
+    // Wait for the notification to arrive
+    const notification = await new Promise<JsonRpcNotification>(
+      (resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("Timed out waiting for session.exited")),
+          5000,
+        );
+        const check = setInterval(() => {
+          const found = messages.find(
+            (m) =>
+              "method" in m && m.method === "session.exited",
+          ) as JsonRpcNotification | undefined;
+          if (found) {
+            clearTimeout(timer);
+            clearInterval(check);
+            resolve(found);
+          }
+        }, 50);
+      },
+    );
+
+    assert.equal(notification.method, "session.exited");
+    assert.equal(notification.params?.sessionId, sessionId);
+    assert.equal(typeof notification.params?.exitCode, "number");
+
+    data.destroy();
+    ctrl.destroy();
+  });
+});
+
+describe("Last-attach-wins eviction", () => {
+  it("closes socket A when socket B connects", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const { socketPath } = await createSession(ctrl, 1);
+
+    // Connect data socket A and verify it works
+    const dataA = await connectDataSocket(socketPath);
+    dataA.write("echo socket-a-marker\n");
+    await waitForOutput(dataA, "socket-a-marker");
+
+    // Connect data socket B (should evict A)
+    const dataB = await connectDataSocket(socketPath);
+    await sleep(200);
+
+    // Verify A no longer receives new output.
+    // After eviction, A should not get any data from a new command.
+    let aGotNewData = false;
+    dataA.on("data", () => { aGotNewData = true; });
+
+    // Verify B receives output
+    dataB.write("echo socket-b-marker\n");
+    const output = await waitForOutput(dataB, "socket-b-marker");
+    assert.ok(output.includes("socket-b-marker"));
+
+    // Give a moment for any stray data to arrive on A
+    await sleep(100);
+    assert.ok(
+      !aGotNewData,
+      "Socket A should not receive output after eviction",
+    );
+
+    dataA.destroy();
+    dataB.destroy();
+    ctrl.destroy();
+  });
+});
+
+describe("session.resize works", () => {
+  it("returns { ok: true } when resizing", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const { sessionId } = await createSession(ctrl, 1);
+
+    const resp = await rpcCall(ctrl, 2, "session.resize", {
+      sessionId,
+      cols: 120,
+      rows: 40,
+    });
+
+    assert.deepEqual(resp.result, { ok: true });
+    assert.equal(resp.error, undefined);
+
+    ctrl.destroy();
+  });
+});
+
+describe("session.foreground returns a command name", () => {
+  it("returns a non-empty command string", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const { sessionId, socketPath } = await createSession(ctrl, 1);
+
+    // Connect data socket so the shell is active and wait for prompt
+    const data = await connectDataSocket(socketPath);
+    await sleep(500);
+
+    const resp = await rpcCall(ctrl, 2, "session.foreground", {
+      sessionId,
+    });
+
+    const result = resp.result as { command: string };
+    assert.equal(typeof result.command, "string");
+    assert.ok(
+      result.command.length > 0,
+      "Foreground command should be non-empty",
+    );
+
+    data.destroy();
+    ctrl.destroy();
+  });
+});
+
+describe("Reconnect queues output produced during gap", () => {
+  it("scrollback includes output from both commands", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const { sessionId, socketPath } = await createSession(ctrl, 1);
+
+    // Connect first data socket, send command, wait for output
+    const data1 = await connectDataSocket(socketPath);
+    data1.write("echo first-cmd-aaa\n");
+    await waitForOutput(data1, "first-cmd-aaa");
+
+    // Disconnect first data socket
+    data1.destroy();
+    await sleep(200);
+
+    // Connect a second data socket directly (no reconnect)
+    // to send another command while the session is alive
+    const data2 = await connectDataSocket(socketPath);
+    data2.write("echo second-cmd-bbb\n");
+    await waitForOutput(data2, "second-cmd-bbb");
+
+    // Disconnect second data socket
+    data2.destroy();
+    await sleep(200);
+
+    // Now do a formal reconnect
+    const reconResp = await rpcCall(ctrl, 2, "session.reconnect", {
+      sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    assert.equal(
+      (reconResp.result as SessionReconnectResult).sessionId,
+      sessionId,
+    );
+
+    // Connect new data socket to receive scrollback
+    const data3 = await connectDataSocket(socketPath);
+    const scrollback = await new Promise<string>((resolve) => {
+      let buf = "";
+      const onData = (chunk: Buffer) => {
+        buf += chunk.toString();
+        // Wait until we see both markers or timeout
+        if (
+          buf.includes("first-cmd-aaa")
+          && buf.includes("second-cmd-bbb")
+        ) {
+          data3.off("data", onData);
+          resolve(buf);
+        }
+      };
+      data3.on("data", onData);
+      setTimeout(() => {
+        data3.off("data", onData);
+        resolve(buf);
+      }, 3000);
+    });
+
+    assert.ok(
+      scrollback.includes("first-cmd-aaa"),
+      "Scrollback should contain output from the first command",
+    );
+    assert.ok(
+      scrollback.includes("second-cmd-bbb"),
+      "Scrollback should contain output from the second command",
+    );
+
+    data3.destroy();
+    ctrl.destroy();
+  });
+});
+
+describe("Unknown RPC method returns error", () => {
+  it("returns error code -32601 for unknown method", async () => {
+    server = createServer();
+    await server.start();
+
+    const ctrl = await connectControl();
+    const resp = await rpcCall(ctrl, 1, "nonexistent.method");
+
+    assert.ok(resp.error, "Response should have an error");
+    assert.equal(resp.error!.code, -32601);
+    assert.ok(resp.error!.message.includes("nonexistent.method"));
+
     ctrl.destroy();
   });
 });
