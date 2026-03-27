@@ -267,6 +267,183 @@ async function ptyKill(pos) {
   await rpc("pty.kill", { sessionId });
 }
 
+// ── Orchestrate ──
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function toWSLPath(winPath) {
+  if (!winPath) return winPath;
+  const m = winPath.match(/^([A-Za-z]):\\(.*)/);
+  if (m) return `/mnt/${m[1].toLowerCase()}/${m[2].replace(/\\/g, "/")}`;
+  return winPath;
+}
+
+async function orchestrate(flags) {
+  const { execSync, spawn } = require("child_process");
+
+  // Parse inputs
+  const taskRaw = flags.task;
+  const taskFile = flags["task-file"];
+  if (!taskRaw && !taskFile) {
+    console.error("Usage: collab orchestrate --task \"...\" [--agents N] [--cwd path] [--timeout secs] [--output dir]");
+    console.error("       collab orchestrate --task-file tasks.txt [--agents N] [--cwd path] [--timeout secs] [--output dir]");
+    process.exit(1);
+  }
+
+  // Load tasks
+  let tasks;
+  if (taskFile) {
+    const content = fs.readFileSync(path.resolve(taskFile), "utf-8").trim();
+    tasks = content.split("\n").filter(l => l.trim() && !l.startsWith("#"));
+  } else {
+    tasks = [taskRaw];
+  }
+
+  const agentCount = flags.agents ? parseInt(flags.agents) : tasks.length;
+  const cwd = flags.cwd ? path.resolve(flags.cwd) : process.cwd();
+  const nativeCwd = toNativePath(cwd);
+  const timeout = (flags.timeout ? parseInt(flags.timeout) : 300) * 1000;
+  const outputDir = flags.output ? path.resolve(flags.output) : path.join(os.tmpdir(), "collab-orch");
+
+  // Prepare workspace
+  const orchDir = path.join(os.tmpdir(), "collab-orch");
+  fs.mkdirSync(orchDir, { recursive: true });
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  console.log(`Orchestrator: ${tasks.length} task(s), ${agentCount} agent(s)`);
+  console.log(`  cwd: ${cwd}`);
+  console.log(`  output: ${outputDir}`);
+  console.log(`  timeout: ${timeout / 1000}s`);
+
+  // Create terminal tiles and launch agents
+  const agents = [];
+  for (let i = 0; i < agentCount; i++) {
+    const task = tasks[i % tasks.length];
+    const taskPath = path.join(orchDir, `task-${i}.txt`);
+    const donePath = path.join(orchDir, `done-${i}`);
+    const resultPath = path.join(outputDir, `result-${i}.md`);
+
+    // Clean previous markers
+    try { fs.unlinkSync(donePath); } catch {}
+    try { fs.unlinkSync(resultPath); } catch {}
+
+    // Write task file
+    fs.writeFileSync(taskPath, task, "utf-8");
+
+    // Write agent script
+    const wslCwd = isWSL ? cwd : toWSLPath(nativeCwd);
+    const wslTaskPath = isWSL ? taskPath : toWSLPath(taskPath);
+    const wslDonePath = isWSL ? donePath : toWSLPath(donePath);
+    const wslResultPath = isWSL ? resultPath : toWSLPath(resultPath);
+
+    const script = [
+      "#!/bin/bash",
+      `cd "${wslCwd}"`,
+      `TASK=$(cat "${wslTaskPath}")`,
+      `RESULT_FILE="${wslResultPath}"`,
+      `claude -p "$TASK" --output-format text > "$RESULT_FILE" 2>&1`,
+      `echo $? > "${wslDonePath}"`,
+    ].join("\n");
+
+    const scriptPath = path.join(orchDir, `agent-${i}.sh`);
+    fs.writeFileSync(scriptPath, script, "utf-8");
+    fs.chmodSync(scriptPath, 0o755);
+
+    // Create a terminal tile on the canvas
+    let tileId;
+    try {
+      const tileResult = await rpc("canvas.tileAdd", { type: "term" });
+      tileId = tileResult && tileResult.tileId;
+    } catch (e) {
+      console.error(`  Agent ${i}: Failed to create tile: ${e.message}`);
+      continue;
+    }
+
+    // Get the pty session for the tile, or create one
+    await sleep(500);
+    let sessionId;
+    try {
+      const sessions = await rpc("pty.list");
+      if (sessions && sessions.sessions) {
+        const tileSess = sessions.sessions.find(s => s.tileId === tileId);
+        if (tileSess) sessionId = tileSess.sessionId;
+      }
+    } catch {}
+
+    if (!sessionId) {
+      try {
+        const created = await rpc("pty.create", { cwd: nativeCwd });
+        sessionId = created && created.sessionId;
+      } catch (e) {
+        console.error(`  Agent ${i}: Failed to create pty: ${e.message}`);
+        continue;
+      }
+    }
+
+    // Launch the agent script in the terminal
+    const wslScriptPath = isWSL ? scriptPath : toWSLPath(scriptPath);
+    const launchCmd = `bash "${wslScriptPath}"\r`;
+    try {
+      await rpc("pty.write", { sessionId, data: launchCmd });
+    } catch (e) {
+      console.error(`  Agent ${i}: Failed to launch: ${e.message}`);
+      continue;
+    }
+
+    agents.push({ i, tileId, sessionId, taskPath, donePath, resultPath, task });
+    console.log(`  Agent ${i}: launched (tile=${tileId}, pty=${sessionId})`);
+  }
+
+  if (agents.length === 0) {
+    console.error("No agents launched successfully.");
+    process.exit(1);
+  }
+
+  // Poll for completion
+  console.log("\nWaiting for agents to complete...");
+  const start = Date.now();
+  const completed = new Set();
+
+  while (completed.size < agents.length && (Date.now() - start) < timeout) {
+    for (const agent of agents) {
+      if (completed.has(agent.i)) continue;
+      if (fs.existsSync(agent.donePath)) {
+        const exitCode = fs.readFileSync(agent.donePath, "utf-8").trim();
+        const status = exitCode === "0" ? "OK" : `FAIL(${exitCode})`;
+        completed.add(agent.i);
+        console.log(`  Agent ${agent.i}: ${status} (${Math.round((Date.now() - start) / 1000)}s)`);
+      }
+    }
+    if (completed.size < agents.length) await sleep(3000);
+  }
+
+  // Report
+  console.log("\n── Results ──");
+  for (const agent of agents) {
+    const done = completed.has(agent.i);
+    const header = `Agent ${agent.i} [${done ? "DONE" : "TIMEOUT"}]`;
+    console.log(`\n${header}`);
+    console.log(`  Task: ${agent.task.slice(0, 80)}${agent.task.length > 80 ? "..." : ""}`);
+    if (fs.existsSync(agent.resultPath)) {
+      const result = fs.readFileSync(agent.resultPath, "utf-8");
+      console.log(`  Result: ${agent.resultPath}`);
+      // Print first 10 lines of result
+      const lines = result.split("\n").slice(0, 10);
+      lines.forEach(l => console.log(`    ${l}`));
+      if (result.split("\n").length > 10) console.log("    ...(truncated)");
+    } else {
+      console.log("  Result: (no output file)");
+    }
+  }
+
+  const ok = completed.size;
+  const fail = agents.length - ok;
+  console.log(`\nSummary: ${ok}/${agents.length} completed${fail > 0 ? `, ${fail} timed out` : ""}`);
+  console.log(`Results in: ${outputDir}`);
+
+  process.exit(fail > 0 ? 1 : 0);
+}
+
 // ── Help ──
 
 function printHelp() {
@@ -291,6 +468,10 @@ Terminal sessions:
   pty write <sid> <data>                            Write to session
   pty read <sid> [--lines n]                        Read output
   pty kill <sid>                                    Kill session
+
+Orchestration:
+  orchestrate --task "..." [--agents N] [--cwd path] [--timeout secs] [--output dir]
+  orchestrate --task-file tasks.txt [options]        Multi-agent task execution
 
 Other:
   ping                                              Health check
@@ -343,6 +524,8 @@ async function main() {
       case "ping":
         console.log(JSON.stringify(await rpc("ping")));
         break;
+      case "orchestrate":
+        return await orchestrate(flags);
       default:
         console.error(`Unknown command: ${group}`);
         printHelp();
