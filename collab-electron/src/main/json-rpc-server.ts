@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { COLLAB_DIR } from "./paths";
 
-const SOCKET_PATH = join(COLLAB_DIR, "ipc.sock");
+const isWin = process.platform === "win32";
+// On Windows, use a named pipe; on Unix, use a domain socket.
+const SOCKET_PATH = isWin
+  ? "\\\\.\\pipe\\collaborator-ipc"
+  : join(COLLAB_DIR, "ipc.sock");
 // Write the breadcrumb to the base directory (~/.collaborator/)
 // so the hook script can discover the socket regardless of
 // whether the app is running in dev or prod mode.
@@ -53,7 +57,9 @@ function discoverMethods(): {
     ...(entry.params ? { params: entry.params } : {}),
   }));
 }
+const TCP_PORT = 7823; // TCP listener for WSL/cross-platform access
 let server: Server | null = null;
+let tcpServer: Server | null = null;
 const connections = new Set<Socket>();
 
 function isJsonRpcRequest(obj: unknown): obj is JsonRpcRequest {
@@ -143,6 +149,8 @@ function handleConnection(socket: Socket): void {
 }
 
 function cleanupStaleSocket(): void {
+  // Named pipes on Windows are managed by the OS; no file to unlink.
+  if (isWin) return;
   if (existsSync(SOCKET_PATH)) {
     try {
       unlinkSync(SOCKET_PATH);
@@ -187,6 +195,22 @@ export function startJsonRpcServer(): Promise<void> {
       console.log(
         `[json-rpc] Listening on ${SOCKET_PATH}`,
       );
+
+      // Also start TCP listener for WSL access
+      tcpServer = createServer(handleConnection);
+      tcpServer.on("error", (err) => {
+        console.warn(
+          `[json-rpc] TCP server on port ${TCP_PORT} failed:`,
+          err.message,
+        );
+        // Non-fatal — named pipe still works
+      });
+      tcpServer.listen(TCP_PORT, "0.0.0.0", () => {
+        console.log(
+          `[json-rpc] TCP listening on 127.0.0.1:${TCP_PORT}`,
+        );
+      });
+
       resolve();
     });
   });
@@ -197,6 +221,11 @@ export function stopJsonRpcServer(): void {
     socket.destroy();
   }
   connections.clear();
+
+  if (tcpServer) {
+    tcpServer.close();
+    tcpServer = null;
+  }
 
   if (server) {
     server.close();

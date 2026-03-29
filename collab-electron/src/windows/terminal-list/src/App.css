@@ -1,8 +1,8 @@
 :root {
   --idle-color: #34d399;
   --busy-color: #fbbf24;
-  --focus-bg: rgba(255, 255, 255, 0.06);
-  --border-focus: rgb(250, 250, 250);
+  --focus-bg: rgba(255, 255, 255, 0.05);
+  --border-focus: rgb(200, 200, 206);
 }
 
 @media (prefers-color-scheme: light) {

@@ -28,7 +28,7 @@ function App() {
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
-  const createTab = useCallback(async (): Promise<Session> => {
+  const createTab = useCallback(async (opts?: { skipAutoCommand?: boolean }): Promise<Session> => {
     const config = await window.api.getConfig();
     const cwd =
       config?.workspaces?.[config?.active_workspace] || undefined;
@@ -42,6 +42,30 @@ function App() {
     };
     setSessions((prev) => [...prev, session]);
     setActiveId(result.sessionId);
+
+    // Auto-run terminal_command from workspace config
+    if (!opts?.skipAutoCommand) {
+      const termCmd = await window.api.getWorkspacePref("terminal_command") as string | null;
+      if (termCmd) {
+        // Wait for shell to be ready
+        await new Promise<void>((resolve) => {
+          const onData = (p: { sessionId: string; data: string }) => {
+            if (p.sessionId === session.id) {
+              window.api.offPtyData(onData);
+              resolve();
+            }
+          };
+          window.api.onPtyData(onData);
+        });
+        // Type the command
+        const fullCmd = `${termCmd}\r`;
+        for (const ch of fullCmd) {
+          window.api.ptyWrite(session.id, ch);
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }
+    }
+
     return session;
   }, []);
 
@@ -190,7 +214,7 @@ function App() {
       if (now - lastRunMs.current < 50) return;
       lastRunMs.current = now;
 
-      const session = await createTab();
+      const session = await createTab({ skipAutoCommand: true });
 
       const alive = () =>
         sessionsRef.current.some((s) => s.id === session.id);

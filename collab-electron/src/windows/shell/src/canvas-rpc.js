@@ -69,6 +69,7 @@ export function createCanvasRpc({
 							type: t.type,
 							filePath: t.filePath,
 							folderPath: t.folderPath,
+							ptySessionId: t.ptySessionId || null,
 							position: { x: t.x, y: t.y },
 							size: { width: t.width, height: t.height },
 						})),
@@ -76,7 +77,7 @@ export function createCanvasRpc({
 					break;
 				}
 				case "tileAdd": {
-					const tileType = params.tileType || "note";
+					const tileType = params.tileType || params.type || "note";
 					const size = defaultSize(tileType);
 					const pos = params.position
 						? { x: params.position.x, y: params.position.y }
@@ -89,6 +90,11 @@ export function createCanvasRpc({
 						tile = tileManager.createGraphTile(
 							pos.x, pos.y, params.filePath, wsPath,
 						);
+					} else if (tileType === "term") {
+						tile = tileManager.createCanvasTile(
+							"term", pos.x, pos.y,
+						);
+						tileManager.spawnTerminalWebview(tile);
 					} else {
 						tile = tileManager.createFileTile(
 							tileType, pos.x, pos.y, params.filePath,

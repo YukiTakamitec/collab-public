@@ -10,7 +10,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, sep } from "node:path";
 import { type FileFilter, isImageFile } from "./file-filter";
 
 export interface DirEntry {
@@ -35,12 +35,12 @@ export function shouldIncludeEntry(
     return true;
   }
 
-  if (dirPath !== rootPath && !dirPath.startsWith(rootPath + "/")) {
+  if (dirPath !== rootPath && !dirPath.startsWith(rootPath + sep)) {
     return true;
   }
 
   const prefix = dirPath.length > rootPath.length
-    ? dirPath.slice(rootPath.length + 1) + "/"
+    ? dirPath.slice(rootPath.length + 1).replace(/\\/g, "/") + "/"
     : "";
   const relPath = prefix + entry.name;
 

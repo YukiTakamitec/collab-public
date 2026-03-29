@@ -46,10 +46,12 @@ import {
 import { stopImageWorker } from "./image-service";
 import { installCli } from "./cli-installer";
 
-// macOS apps launched from Finder don't inherit the user's shell
-// LANG, so child processes (tmux, shells) default to ASCII.
-if (!process.env.LANG || !process.env.LANG.includes("UTF-8")) {
-  process.env.LANG = "en_US.UTF-8";
+// Ensure UTF-8 LANG for child processes (terminals, git).
+// macOS Finder-launched apps and some Windows setups lack this.
+if (process.platform !== "win32") {
+  if (!process.env.LANG || !process.env.LANG.includes("UTF-8")) {
+    process.env.LANG = "en_US.UTF-8";
+  }
 }
 
 process.on("uncaughtException", (error) => {
@@ -434,15 +436,31 @@ function createWindow(): void {
     (saved.isMaximized || boundsVisibleOnAnyDisplay(saved));
   const state = useSaved ? saved : DEFAULT_STATE;
 
+  const isMac = process.platform === "darwin";
+  const isWin = process.platform === "win32";
+
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: state.width,
     height: state.height,
     minWidth: 400,
     minHeight: 400,
     titleBarStyle: "hidden",
-    vibrancy: "under-window",
-    visualEffectState: "active",
-    trafficLightPosition: { x: 14, y: 12 },
+    ...(isMac
+      ? {
+          vibrancy: "under-window",
+          visualEffectState: "active",
+          trafficLightPosition: { x: 14, y: 12 },
+        }
+      : {}),
+    ...(isWin
+      ? {
+          titleBarOverlay: {
+            color: "#1e1e20",
+            symbolColor: "#c8c8ce",
+            height: 36,
+          },
+        }
+      : {}),
     webPreferences: {
       preload: getPreloadPath("shell"),
       contextIsolation: true,
@@ -533,8 +551,8 @@ ipcMain.handle(
 
 ipcMain.handle(
   "pty:create",
-  (event, params?: { cwd?: string; cols?: number; rows?: number }) =>
-    pty.createSession(params?.cwd, event.sender.id, params?.cols, params?.rows),
+  (event, params?: { cwd?: string; cols?: number; rows?: number; initialCommand?: string }) =>
+    pty.createSession(params?.cwd, event.sender.id, params?.cols, params?.rows, params?.initialCommand),
 );
 
 ipcMain.handle(
@@ -724,23 +742,22 @@ app.whenReady().then(async () => {
   );
 
   protocol.handle("collab-file", (request) => {
-    const filePath = decodeURIComponent(
+    let filePath = decodeURIComponent(
       new URL(request.url).pathname,
     );
-    return net.fetch(`file://${filePath}`);
+    // On Windows, URL pathname starts with /C:/... — strip leading slash
+    if (process.platform === "win32" && filePath.match(/^\/[A-Za-z]:\//)) {
+      filePath = filePath.slice(1);
+    }
+    return net.fetch(pathToFileURL(filePath).href);
   });
 
   shuttingDown = false;
 
-  const tmuxCheck = pty.verifyTmuxAvailable();
-  if (!tmuxCheck.ok) {
-    console.error("tmux check failed:", tmuxCheck.message);
-    if (!app.isPackaged) {
-      dialog.showErrorBox(
-        "tmux not found",
-        `${tmuxCheck.message}\n\nThe terminal will not work until tmux is installed and on your PATH.`,
-      );
-    }
+  try {
+    pty.verifyTmuxAvailable();
+  } catch (err) {
+    console.error("tmux binary not found or not executable:", err);
   }
 
   config = loadConfig();
@@ -781,9 +798,141 @@ app.whenReady().then(async () => {
   registerMethod("ping", () => ({ pong: true }), {
     description: "Health check — returns {pong: true}",
   });
+
+  registerMethod("debug.webcontents", () => {
+    const { webContents: wc } = require("electron");
+    const all = wc.getAllWebContents();
+    return {
+      contents: all.map((w: any) => ({
+        id: w.id,
+        url: w.getURL(),
+        type: w.getType(),
+      })),
+    };
+  }, { description: "List all webContents for debugging" });
   registerMethod("workspace.getConfig", () => config, {
     description: "Return the current app configuration",
   });
+
+  // ── Terminal orchestration API ──
+  registerMethod(
+    "pty.list",
+    async () => {
+      const ids = pty.listSessions();
+      // Try to get tile mapping from canvas
+      let tileMap = new Map<string, string>();
+      try {
+        const tileResult = await new Promise<any>((resolve, reject) => {
+          const requestId = require("node:crypto").randomUUID();
+          const timer = setTimeout(() => reject(new Error("timeout")), 3000);
+          const handler = (_event: any, response: any) => {
+            if (response.requestId !== requestId) return;
+            clearTimeout(timer);
+            ipcMain.removeListener("canvas:rpc-response", handler);
+            resolve(response.result);
+          };
+          ipcMain.on("canvas:rpc-response", handler);
+          mainWindow?.webContents.send("canvas:rpc-request", {
+            requestId,
+            method: "tileList",
+            params: {},
+          });
+        });
+        if (tileResult?.tiles) {
+          for (const t of tileResult.tiles) {
+            if (t.type === "term" && t.ptySessionId) {
+              tileMap.set(t.ptySessionId, t.id);
+            }
+          }
+        }
+      } catch {
+        // Canvas not ready, proceed without tile info
+      }
+      return {
+        sessions: ids.map((id) => {
+          const fg = pty.getForegroundProcess(id);
+          return {
+            sessionId: id,
+            foreground: fg,
+            tileId: tileMap.get(id) || null,
+          };
+        }),
+      };
+    },
+    {
+      description: "List all active terminal sessions with tile mapping",
+    },
+  );
+
+  registerMethod(
+    "pty.create",
+    (params) => {
+      const p = (params || {}) as { cwd?: string };
+      const result = pty.createSession(
+        p.cwd,
+        mainWindow?.webContents.id,
+      );
+      return result;
+    },
+    {
+      description: "Create a new terminal session",
+      params: { cwd: "(optional) Working directory" },
+    },
+  );
+
+  registerMethod(
+    "pty.write",
+    (params) => {
+      const p = params as { sessionId: string; data: string };
+      if (!p.sessionId || typeof p.data !== "string") {
+        throw new Error("sessionId and data are required");
+      }
+      pty.writeToSession(p.sessionId, p.data);
+      return { ok: true };
+    },
+    {
+      description: "Write data (command) to a terminal session",
+      params: {
+        sessionId: "Target session ID",
+        data: "String to write (include \\r\\n to execute)",
+      },
+    },
+  );
+
+  registerMethod(
+    "pty.kill",
+    (params) => {
+      const p = params as { sessionId: string };
+      if (!p.sessionId) {
+        throw new Error("sessionId is required");
+      }
+      pty.killSession(p.sessionId);
+      return { ok: true };
+    },
+    {
+      description: "Kill a terminal session",
+      params: { sessionId: "Session ID to kill" },
+    },
+  );
+
+  registerMethod(
+    "pty.read",
+    (params) => {
+      const p = params as { sessionId: string; lines?: number };
+      if (!p.sessionId) {
+        throw new Error("sessionId is required");
+      }
+      const output = pty.readSession(p.sessionId, p.lines || 50);
+      return { output };
+    },
+    {
+      description: "Read recent output from a terminal session",
+      params: {
+        sessionId: "Target session ID",
+        lines: "(optional) Number of recent lines (default 50)",
+      },
+    },
+  );
 
   try {
     await startJsonRpcServer();

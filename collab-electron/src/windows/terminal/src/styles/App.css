@@ -5,10 +5,10 @@
 }
 
 :root {
-	--foreground: rgb(220, 220, 220);
-	--background: #121212;
-	--border: rgba(255, 255, 255, 0.2);
-	--muted-foreground: rgb(132, 132, 132);
+	--foreground: rgb(200, 200, 206);
+	--background: rgb(30, 30, 32);
+	--border: rgba(255, 255, 255, 0.08);
+	--muted-foreground: rgb(120, 120, 128);
 	--font-mono: 'Menlo', 'Monaco', 'Courier New', monospace;
 }
 

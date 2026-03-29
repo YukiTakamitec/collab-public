@@ -27,7 +27,7 @@ button {
 }
 
 .dark {
-	--card: rgb(24, 24, 24);
+	--card: rgb(36, 36, 40);
 	--color-background-toggle-active: color-mix(in srgb, var(--card) 80%, var(--border) 20%);
 }
 

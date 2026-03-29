@@ -221,6 +221,7 @@ export function registerWorkspaceHandlers(
         selected_file: null,
         expanded_dirs: [],
         agent_skip_permissions: false,
+        terminal_command: null,
       };
     }
     return getWsConfig(path);
@@ -237,6 +238,8 @@ export function registerWorkspaceHandlers(
       if (key === "expanded_dirs") return config.expanded_dirs;
       if (key === "agent_skip_permissions")
         return config.agent_skip_permissions;
+      if (key === "terminal_command")
+        return config.terminal_command;
       return null;
     },
   );
@@ -256,6 +259,11 @@ export function registerWorkspaceHandlers(
           : [];
       } else if (key === "agent_skip_permissions") {
         config.agent_skip_permissions = value === true;
+      } else if (key === "terminal_command") {
+        config.terminal_command =
+          typeof value === "string" && value !== ""
+            ? value
+            : null;
       }
       saveWorkspaceConfig(active, config);
     },

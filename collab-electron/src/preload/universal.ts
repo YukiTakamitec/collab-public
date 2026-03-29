@@ -208,10 +208,10 @@ contextBridge.exposeInMainWorld("api", {
   readTree: (params: { root: string }) =>
     ipcRenderer.invoke("workspace:read-tree", params),
   // Terminal (PTY)
-  ptyCreate: (cwd?: string, cols?: number, rows?: number) =>
+  ptyCreate: (cwd?: string, cols?: number, rows?: number, initialCommand?: string) =>
     ipcRenderer.invoke(
       "pty:create",
-      { cwd, cols, rows },
+      { cwd, cols, rows, initialCommand },
     ),
   ptyWrite: (sessionId: string, data: string) =>
     ipcRenderer.invoke("pty:write", { sessionId, data }),

@@ -190,7 +190,7 @@ export function getTileLabel(tile) {
 }
 
 export function splitFilepath(path) {
-  const parts = path.split("/");
+  const parts = path.split(/[\\/]/);
   const name = parts.pop() || path;
   const parent = parts.length > 0 ? parts.join("/") + "/" : "";
   return { parent, name };

@@ -261,7 +261,7 @@ async function init() {
 		onTerminalSessionCreated(tile) {
 			terminalListWebview.send("terminal-list:add", {
 				sessionId: tile.ptySessionId,
-				shell: "zsh",
+				shell: tile.shell || "shell",
 				cwd: tile.cwd || "~",
 				foreground: null,
 				tileId: tile.id,

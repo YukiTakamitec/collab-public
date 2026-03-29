@@ -65,7 +65,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.tileList",
-    (params) => sendToShell("canvas.tileList", params),
+    (params) => sendToShell("tileList", params),
     {
       description: "List all canvas tiles with positions",
       params: {},
@@ -74,11 +74,11 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.tileAdd",
-    (params) => sendToShell("canvas.tileAdd", params),
+    (params) => sendToShell("tileAdd", params),
     {
       description: "Create a new tile on the canvas",
       params: {
-        type: "Tile type (note, code, image, graph, terminal)",
+        type: "Tile type: note, code, image, graph, term (alias: tileType)",
         filePath: "(optional) Absolute path to file",
         folderPath: "(optional) Absolute path to folder",
         position: "(optional) {x, y} canvas coordinates",
@@ -89,7 +89,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.tileRemove",
-    (params) => sendToShell("canvas.tileRemove", params),
+    (params) => sendToShell("tileRemove", params),
     {
       description: "Remove a tile from the canvas",
       params: { tileId: "ID of the tile to remove" },
@@ -98,7 +98,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.tileMove",
-    (params) => sendToShell("canvas.tileMove", params),
+    (params) => sendToShell("tileMove", params),
     {
       description: "Move a tile to a new position",
       params: {
@@ -110,7 +110,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.tileResize",
-    (params) => sendToShell("canvas.tileResize", params),
+    (params) => sendToShell("tileResize", params),
     {
       description: "Resize a tile",
       params: {
@@ -122,7 +122,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.viewportGet",
-    (params) => sendToShell("canvas.viewportGet", params),
+    (params) => sendToShell("viewportGet", params),
     {
       description: "Get current canvas viewport (pan and zoom)",
       params: {},
@@ -131,7 +131,7 @@ export function registerCanvasRpc(win: BrowserWindow): void {
 
   registerMethod(
     "canvas.viewportSet",
-    (params) => sendToShell("canvas.viewportSet", params),
+    (params) => sendToShell("viewportSet", params),
     {
       description: "Set canvas viewport pan and zoom",
       params: {

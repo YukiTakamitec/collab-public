@@ -24,17 +24,17 @@
 }
 
 .dark {
-	--bg: rgb(18, 18, 18);
-	--bg-rgb: 18, 18, 18;
-	--canvas-bg: rgb(24, 24, 24);
-	--canvas-bg-hi: rgb(38, 38, 38);
-	--canvas-bg-rgb: 24, 24, 24;
-	--fg: rgb(220, 220, 220);
-	--border: rgba(255, 255, 255, 0.2);
-	--tile-border: rgba(255, 255, 255, 0.35);
-	--muted: rgb(132, 132, 132);
-	--edge-dot: rgb(72, 210, 130);
-	--edge-dot-hover: rgb(90, 235, 150);
+	--bg: rgb(30, 30, 32);
+	--bg-rgb: 30, 30, 32;
+	--canvas-bg: rgb(24, 24, 26);
+	--canvas-bg-hi: rgb(40, 40, 44);
+	--canvas-bg-rgb: 24, 24, 26;
+	--fg: rgb(200, 200, 206);
+	--border: rgba(255, 255, 255, 0.08);
+	--tile-border: rgba(255, 255, 255, 0.12);
+	--muted: rgb(120, 120, 128);
+	--edge-dot: rgb(72, 200, 130);
+	--edge-dot-hover: rgb(88, 220, 145);
 }
 
 * {
@@ -782,24 +782,29 @@ body {
 .canvas-tile {
 	position: absolute;
 	border-radius: 8px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 	display: flex;
 	flex-direction: column;
 	background: var(--bg);
-	border: 1px solid rgba(128, 128, 128, 0.2);
+	border: 1px solid rgba(128, 128, 128, 0.15);
 	user-select: none;
 }
 
 .canvas-tile.tile-focused {
 	box-shadow:
-		0 0 0 1px rgba(0, 0, 0, 0.5),
-		0 2px 8px rgba(0, 0, 0, 0.5);
+		0 0 0 1px rgba(0, 0, 0, 0.4),
+		0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.dark .canvas-tile {
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+	border-color: rgba(255, 255, 255, 0.06);
 }
 
 .dark .canvas-tile.tile-focused {
 	box-shadow:
-		0 0 0 1px rgba(255, 255, 255, 0.5),
-		0 2px 8px rgba(0, 0, 0, 0.5);
+		0 0 0 1px rgba(140, 160, 255, 0.3),
+		0 2px 16px rgba(0, 0, 0, 0.5);
 }
 
 
@@ -902,12 +907,12 @@ body {
 }
 
 .dark .canvas-tile[data-tile-type="term"] {
-	background: rgb(8, 8, 8);
+	background: rgb(24, 24, 26);
 }
 
 .dark .canvas-tile[data-tile-type="term"] .tile-title-bar {
-	background: rgb(8, 8, 8);
-	color: rgba(255, 255, 255, 0.7);
+	background: rgb(24, 24, 26);
+	color: rgba(200, 200, 206, 0.7);
 }
 
 .canvas-tile[data-tile-type="note"] .tile-title-bar,
@@ -921,8 +926,8 @@ body {
 
 .dark .canvas-tile[data-tile-type="note"] .tile-title-bar,
 .dark .canvas-tile[data-tile-type="code"] .tile-title-bar {
-	background: #000;
-	color: rgba(255, 255, 255, 0.85);
+	background: rgb(36, 36, 40);
+	color: rgba(200, 200, 206, 0.85);
 }
 
 .canvas-tile[data-tile-type="note"] .tile-title-text,

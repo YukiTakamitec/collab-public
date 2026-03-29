@@ -6,12 +6,14 @@ export interface WorkspaceConfig {
   selected_file: string | null;
   expanded_dirs: string[];
   agent_skip_permissions: boolean;
+  terminal_command: string | null;
 }
 
 const DEFAULT_CONFIG: WorkspaceConfig = {
   selected_file: null,
   expanded_dirs: [],
   agent_skip_permissions: false,
+  terminal_command: null,
 };
 
 export function workspaceConfigPath(workspacePath: string): string {
@@ -34,6 +36,10 @@ export function loadWorkspaceConfig(
         : [],
       agent_skip_permissions:
         parsed.agent_skip_permissions === true,
+      terminal_command:
+        typeof parsed.terminal_command === "string"
+          ? parsed.terminal_command
+          : null,
     };
   } catch {
     return { ...DEFAULT_CONFIG };

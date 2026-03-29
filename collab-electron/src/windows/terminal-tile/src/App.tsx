@@ -21,8 +21,6 @@ function App() {
   const [restored, setRestored] = useState(false);
   const [scrollbackData, setScrollbackData] =
     useState<string | null>(null);
-  const [sessionMode, setSessionMode] =
-    useState<"tmux" | "sidecar" | undefined>(undefined);
 
   useEffect(() => {
     const params = new URLSearchParams(
@@ -42,29 +40,19 @@ function App() {
           if (result.scrollback) {
             setScrollbackData(result.scrollback);
           }
-          if (result.mode) {
-            setSessionMode(result.mode);
+          // Use the returned sessionId — on Windows, reconnect may
+          // create a fresh session with a different ID.
+          const actualId = result.sessionId || existingSessionId;
+          setSessionId(actualId);
+          if (actualId !== existingSessionId) {
+            window.api.notifyPtySessionId(actualId);
           }
-          setSessionId(existingSessionId);
         })
-        .catch(async () => {
+        .catch(() => {
           setRestored(false);
           const est = estimateTermSize();
-          // Recover the original working directory from session
-          // metadata so the fallback session opens in the right place.
-          let fallbackCwd = cwd;
-          if (!fallbackCwd && existingSessionId) {
-            try {
-              const meta = await window.api.ptyReadMeta(
-                existingSessionId,
-              );
-              if (meta?.cwd) fallbackCwd = meta.cwd;
-            } catch {
-              // Metadata unavailable — fall through to default
-            }
-          }
           window.api
-            .ptyCreate(fallbackCwd, est.cols, est.rows)
+            .ptyCreate(cwd, est.cols, est.rows)
             .then((result) => {
               setSessionId(result.sessionId);
               window.api.notifyPtySessionId(
@@ -85,15 +73,19 @@ function App() {
     }
 
     const { cols, rows } = estimateTermSize();
-    window.api
-      .ptyCreate(cwd, cols, rows)
-      .then((result) => {
-        setSessionId(result.sessionId);
-        window.api.notifyPtySessionId(result.sessionId);
-      })
-      .catch(() => {
-        setExited(true);
-      });
+    // Fetch terminal_command before creating PTY so main process handles it
+    window.api.getWorkspacePref("terminal_command").then((termCmd) => {
+      const cmd = typeof termCmd === "string" ? termCmd : undefined;
+      window.api
+        .ptyCreate(cwd, cols, rows, cmd)
+        .then((result) => {
+          setSessionId(result.sessionId);
+          window.api.notifyPtySessionId(result.sessionId);
+        })
+        .catch(() => {
+          setExited(true);
+        });
+    });
   }, []);
 
   useEffect(() => {
@@ -132,7 +124,6 @@ function App() {
       visible={true}
       restored={restored}
       scrollbackData={scrollbackData}
-      mode={sessionMode}
     />
   );
 }
