@@ -338,6 +338,7 @@ async function orchestrate(flags) {
 
     const script = [
       "#!/bin/bash",
+      "unset CLAUDECODE",
       `cd "${wslCwd}"`,
       `TASK=$(cat "${wslTaskPath}")`,
       `RESULT_FILE="${wslResultPath}"`,
