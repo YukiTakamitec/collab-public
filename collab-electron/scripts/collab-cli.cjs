@@ -350,26 +350,23 @@ async function orchestrate(flags) {
     fs.writeFileSync(scriptPath, script, "utf-8");
     fs.chmodSync(scriptPath, 0o755);
 
-    // Create a terminal tile on the canvas
-    let tileId;
+    // Create a pty session (try tile first for visual feedback, fallback to direct pty)
+    let tileId = null;
+    let sessionId;
+
+    // Try canvas tile (may timeout if renderer is slow)
     try {
       const tileResult = await rpc("canvas.tileAdd", { type: "term" });
       tileId = tileResult && tileResult.tileId;
-    } catch (e) {
-      console.error(`  Agent ${i}: Failed to create tile: ${e.message}`);
-      continue;
-    }
-
-    // Get the pty session for the tile, or create one
-    await sleep(500);
-    let sessionId;
-    try {
+      await sleep(500);
       const sessions = await rpc("pty.list");
       if (sessions && sessions.sessions) {
         const tileSess = sessions.sessions.find(s => s.tileId === tileId);
         if (tileSess) sessionId = tileSess.sessionId;
       }
-    } catch {}
+    } catch {
+      // Canvas unavailable — fall back to headless pty
+    }
 
     if (!sessionId) {
       try {
@@ -391,8 +388,9 @@ async function orchestrate(flags) {
       continue;
     }
 
+    const label = tileId ? `tile=${tileId}` : "headless";
     agents.push({ i, tileId, sessionId, taskPath, donePath, resultPath, task });
-    console.log(`  Agent ${i}: launched (tile=${tileId}, pty=${sessionId})`);
+    console.log(`  Agent ${i}: launched (${label}, pty=${sessionId})`);
   }
 
   if (agents.length === 0) {
